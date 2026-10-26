@@ -1,85 +1,58 @@
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
-from langchain.llms import Ollama
-from langchain.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain.chains import LLMChain
-from langchain_community.vectorstores import FAISS
 import re
-from typing import List
+from typing import List, Optional, Any
+from rag_llama.models import create_llama_adapter
+from rag_llama.rag import SuperiorRAG, MultiContextManager
+from rag_llama.network import ContextNetwork
 
 # Define paths
 vector_store_folder = 'vector_store'
 
+
 def extract_keywords(query: str) -> List[str]:
-    """
-    Extracts keywords from the input query by removing common stop words and special characters.
-    """
-    # Lowercase and remove non-alphanumeric characters
+    """Extracts keywords from input query removing stop words and non-alphanumeric chars."""
     query = query.lower()
-    query = re.sub(r'[^a-z\s]', '', query)
-
-    # Tokenize and remove common stop words
+    query = re.sub(r'[^a-z0-9\s]', '', query)
     stop_words = set(["a", "an", "the", "and", "or", "but", "of", "to", "in", "with", "on", "for", "at", "by"])
-    keywords = [word for word in query.split() if word not in stop_words]
+    return [word for word in query.split() if word not in stop_words]
 
-    return keywords
 
-def build_qa_chain(vectorstore, llm):
-    RAG_TEMPLATE = """
-    You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. Use three sentences maximum and keep the answer concise.
+class QAChainWrapperV2:
+    """Wrapper to maintain compatibility with legacy qa_chain.run(chain_input)."""
 
-    <context>
-    {context}
-    </context>
+    def __init__(self, rag_engine: SuperiorRAG):
+        self.rag_engine = rag_engine
 
-    Answer the following question:
+    def run(self, chain_input: dict) -> str:
+        question = chain_input.get("question", "")
+        res = self.rag_engine.query(question=question, use_context_network=True)
+        return res.get("answer", "")
 
-    {question}
-    """
 
-    prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
-    chain = LLMChain(
-        llm=llm,
-        prompt=prompt,
-        output_parser=StrOutputParser()
-    )
+def build_qa_chain(vectorstore=None, llm=None):
+    model_name = getattr(llm, "model", "llama3.1") if llm else "llama3.1"
+    adapter = create_llama_adapter(provider="ollama", model_name=model_name)
+    rag_engine = SuperiorRAG(llama_adapter=adapter)
+    return QAChainWrapperV2(rag_engine)
 
-    return chain
 
-def query_rag():
-    # Initialize embedding model and vector store
-    embedding_model = "plutonioumguy/bge-m3"
-    vectorstore = Chroma(persist_directory=vector_store_folder, embedding_function=OllamaEmbeddings(model=embedding_model))
+def query_rag(model_name: str = "llama3.1"):
+    adapter = create_llama_adapter(provider="ollama", model_name=model_name)
+    rag_engine = SuperiorRAG(llama_adapter=adapter)
 
-    # Initialize LLM
-    llm = Ollama(model="llama3.1", base_url="http://localhost:11434")
+    print(f"RAG-LLama Superior RAG & Context Network initialized (Model: {model_name}, Max Context: {adapter.get_max_context_length()} tokens)")
 
-    # Query loop
     while True:
-        query = input("\nEnter your query (type 'quit' to exit): ")
-        if query.lower() == 'quit':
+        try:
+            query = input("\nEnter your query (type 'quit' to exit): ")
+        except EOFError:
+            break
+        if not query or query.lower() == 'quit':
             break
 
-        # Extract keywords from query
         keywords = extract_keywords(query)
-        keyword_query = ' '.join(keywords)
+        res = rag_engine.query(question=query, use_context_network=True)
+        print("Answer:", res.get("answer", ""))
 
-        # Build the QA chain
-        qa_chain = build_qa_chain(vectorstore, llm)
-
-        # Retrieve documents from vector store using keywords
-        docs = vectorstore.similarity_search(keyword_query)
-
-        # Prepare input for the chain
-        chain_input = {
-            "context": docs,
-            "question": query
-        }
-
-        # Get and print the answer
-        answer = qa_chain.run(chain_input)
-        print("Answer:", answer)
 
 if __name__ == "__main__":
     query_rag()

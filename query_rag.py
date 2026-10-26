@@ -1,65 +1,47 @@
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
-from langchain.llms import Ollama
-from langchain.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain.chains import LLMChain
-from langchain_community.vectorstores import FAISS
+from typing import Optional, List, Any
+from rag_llama.models import create_llama_adapter, OllamaLlamaAdapter
+from rag_llama.rag import SuperiorRAG, MultiContextManager
 
 # Define paths
 vector_store_folder = 'vector_store'
 
-def build_qa_chain(vectorstore, llm):
-    RAG_TEMPLATE = """
-    You are an assistant for question-answering tasks. Use the following pieces of retrieved context to answer the question. If you don't know the answer, just say that you don't know. Use three sentences maximum and keep the answer concise.
 
-    <context>
-    {context}
-    </context>
+class QAChainWrapper:
+    """Wrapper to maintain compatibility with legacy qa_chain.run(chain_input)."""
 
-    Answer the following question:
+    def __init__(self, rag_engine: SuperiorRAG):
+        self.rag_engine = rag_engine
 
-    {question}
-    """
+    def run(self, chain_input: dict) -> str:
+        question = chain_input.get("question", "")
+        res = self.rag_engine.query(question=question)
+        return res.get("answer", "")
 
-    prompt = ChatPromptTemplate.from_template(RAG_TEMPLATE)
-    chain = LLMChain(
-        llm=llm,
-        prompt=prompt,
-        output_parser=StrOutputParser()
-    )
 
-    return chain
+def build_qa_chain(vectorstore=None, llm=None):
+    model_name = getattr(llm, "model", "llama3.1") if llm else "llama3.1"
+    adapter = create_llama_adapter(provider="ollama", model_name=model_name)
+    rag_engine = SuperiorRAG(llama_adapter=adapter)
+    return QAChainWrapper(rag_engine)
 
-def query_rag():
-    # Initialize embedding model and vector store
-    embedding_model = "plutonioumguy/bge-m3"
-    vectorstore = Chroma(persist_directory=vector_store_folder, embedding_function=OllamaEmbeddings(model=embedding_model))
 
-    # Initialize LLM
-    llm = Ollama(model="llama3.1", base_url="http://localhost:11434")
+def query_rag(model_name: str = "llama3.1"):
+    adapter = create_llama_adapter(provider="ollama", model_name=model_name)
+    rag_engine = SuperiorRAG(llama_adapter=adapter)
 
-    # Query loop
+    print(f"RAG-LLama Multi-Context System initialized (Model: {model_name}, Max Context: {adapter.get_max_context_length()} tokens)")
+
     while True:
-        query = input("\nEnter your query (type 'quit' to exit): ")
-        if query.lower() == 'quit':
+        try:
+            query = input("\nEnter your query (type 'quit' to exit): ")
+        except EOFError:
+            break
+        if not query or query.lower() == 'quit':
             break
 
-        # Build the QA chain
-        qa_chain = build_qa_chain(vectorstore, llm)
+        res = rag_engine.query(question=query)
+        print("Answer:", res.get("answer", ""))
 
-        # Retrieve documents from vector store
-        docs = vectorstore.similarity_search(query)
-
-        # Prepare input for the chain
-        chain_input = {
-            "context": docs,
-            "question": query
-        }
-
-        # Get and print the answer
-        answer = qa_chain.run(chain_input)
-        print("Answer:", answer)
 
 if __name__ == "__main__":
     query_rag()
