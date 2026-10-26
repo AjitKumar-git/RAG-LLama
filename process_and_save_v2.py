@@ -1,49 +1,40 @@
 import os
 import concurrent.futures
-from langchain_chroma import Chroma
-from langchain_ollama import OllamaEmbeddings
+from rag_llama.rag.multi_context import MultiContextManager
 
-# Define paths
 data_input_folder = 'data_input'
 vector_store_folder = 'vector_store'
 
-# Ensure vector_store folder exists
 if not os.path.exists(vector_store_folder):
     os.makedirs(vector_store_folder)
 
-def process_file(file_path, vectorstore):
-    # Read and split text content from the file
-    with open(file_path, 'r', encoding='utf-8') as file:
+
+def process_file(file_path, mcm, domain_id="default"):
+    filename = os.path.basename(file_path)
+    with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
         text_content = file.read()
 
-    # Split text into chunks for embedding
-    chunks = text_content.split('\n\n')  # Split by paragraphs
-    for chunk in chunks:
-        if chunk.strip():
-            vectorstore.add_texts([chunk])
+    chunks = [c.strip() for c in text_content.split('\n\n') if c.strip()]
+    if chunks:
+        mcm.add_document_to_domain(
+            domain_id=domain_id,
+            doc_id=filename,
+            text_chunks=chunks,
+            metadata={"source_file": file_path}
+        )
 
-    # Remove processed file
     os.remove(file_path)
-    print(f"Processed and deleted {file_path}")
+    print(f"Processed into domain '{domain_id}' with Context Network links and deleted {filename}")
 
-def process_and_save_to_vector_store(embedding_model="plutonioumguy/bge-m3", max_workers=None):
-    # Initialize embedding function and vector store
-    embedding_function = OllamaEmbeddings(model=embedding_model)
-    vectorstore = Chroma(persist_directory=vector_store_folder, embedding_function=embedding_function)
 
-    # Get all txt files in data_input
+def process_and_save_to_vector_store(embedding_model="plutonioumguy/bge-m3", max_workers=None, domain_id="default"):
+    mcm = MultiContextManager(default_domain=domain_id)
     txt_files = [os.path.join(data_input_folder, f) for f in os.listdir(data_input_folder) if f.endswith('.txt')]
 
-    # Process files in parallel
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(process_file, file_path, vectorstore) for file_path in txt_files]
-
-        # Wait for all tasks to complete
+        futures = [executor.submit(process_file, file_path, mcm, domain_id) for file_path in txt_files]
         concurrent.futures.wait(futures)
 
-    # Persist the vector store
-    vectorstore.persist()
 
 if __name__ == "__main__":
-    # Use the number of CPUs as the max workers, or customize based on your preference
-    process_and_save_to_vector_store(max_workers=5*os.cpu_count())
+    process_and_save_to_vector_store(max_workers=5 * os.cpu_count())
